@@ -3,11 +3,26 @@ from arcpy import env
 import os
 import sys
 
-GDB_PATH = r'C:\Users\bmd\Desktop\darmc_beta_version\darmc.gdb'
+class EmptyGeodatabaseError(Exception)
+    def __init__(self, msg):
+        print 'EmptyGeodatabaseError: {}'.format(msg)
 
-def find_all_fcs(current_workspace):
+def find_all_feature_classes(current_workspace):
     """
-    Return a list of all feature classes in current_workspace
+    Return a list of all feature classes in current_workplace,
+    including those that exist within feature datasets.
+
+    Paramteters
+    ----------
+    current_workspace : must be a valid geodatabase containing
+        at least on feature class
+
+    Returns
+    ---------
+    paths_to_export : a list of feature classes. If no paths are
+        found, (i.e. paths_to_export == []), then the function 
+        will not return and an EmptyGeodatabaseError will be
+        raised.
     """
     paths_to_export = arcpy.ListFeatureClasses()
     
@@ -18,61 +33,81 @@ def find_all_fcs(current_workspace):
             paths_to_export.append(os.path.join(fds, fc))
         env.workspace = current_workspace
     
-    # warn user if no paths are found
     if len(paths_to_export) == 0:
-        print '> WARNING: No feature classes were found in this workspace'
+        raise EmptyGeodatabaseError
+    else:
+        return paths_to_export
 
-    return paths_to_export
+def ensure_valid_gdb(path):
+    """
+    Ensures that path points to a file that (1) exists and (2) appears
+    to be a filegeodatabase (i.e. a file that has the extension .gdb).
+    
+    Paramteters
+    -----------
+    path: a system path identifying a file geodatabase
 
-def is_valid_gdb(path):
+    Returns
+    ----------
+    True if the path appears to be a valid geodatabase, otherwise raises
+    an IOError with more information for the user
     """
-    Return True if path points to a valid geodatabase
-    """
-    if not os.path.exists(path):
-        print '> ERROR: path does not appear to point to a file'
-        return False
+    if not os.path.isfile(path):
+        raise IOError("geodatabase path does not appear to point to a file.\n")
     elif path[-4:] != '.gdb':
-        print path[-4:]
-        print '> ERROR: path exists, but does not point to a geodatabase'
-        return False
+        raise IOError("path exists, but does not point to a geodatabase.\n")
     else:
         return True
 
-def dump_geodatabase_to_folder(path, projection=4326, folder='Worldmap Files'):
+def project_feature_class(infc, folder, projection = 4326):
+    """
+    Convert a feature class infc from its current projection to a
+    new projection, and place the new output in folder. If infc
+    does not have a valid spatial reference, then it cannot be
+    projected.
+
+    Paramteters
+    -----------
+    infc : a feature class to be projected
+
+    folder : folder in which output will be placed
+
+    projection : by default, EPSG:4326 (WGS 84), but can be any
+        projection WKID.
+    """
+    dsc = arcpy.Describe(infc)
+    shortname = infc.split('\\')[1] if len(infc.split('\\')) == 2 else infc
+    if dsc.spatialReference.Name == "Unknown":
+        print 'Skipped {} - undefined coordinate system.'.format(shortname)
+    else:
+        print 'Projecting {}'.format(shortname)
+        outfc = os.path.join(folder, shortname + '.shp')
+        outcs = arcpy.SpatialReference(projection)
+        arcpy.Project_management(infc, outfc, outcs)
+        print arcpy.GetMessages()
+
+def dump_geodatabase_to_folder(path, folder='Worldmap Files'):
     """
     Project all feature classes in the geodatabase and save them
     as shapefiles  in a folder
     """
-
     # make sure that path exists and is a geodatabase
-    if not is_valid_gdb(path):
-        sys.exit()
+    ensure_valid_gdb(path):
 
-    # set workspace
+    # set workspace and output folder
     env.workspace = path
-
-    # set up an empty folder to write re-projected data files
     if os.path.isdir(folder):
         os.removedirs(folder)
     os.mkdir(folder)
 
     # get complete list of FCs to project
-    feature_classes = find_all_fcs(env.workspace)
+    feature_classes = find_all_feature_classes(env.workspace)
     print 'Recovered {0} feature classes to project'.format(len(feature_classes))
 
     # project feature classes - skipping any with unknown references
-    for infc in feature_classes[0:5]:
-        dsc = arcpy.Describe(infc)
-        shortname = infc.split('\\')[1] if len(infc.split('\\')) == 2 else infc
-        if dsc.spatialReference.Name == "Unknown":
-            print 'Skipped {} - undefined coordinate system.'.format(shortname)
-        else:
-            print 'Projecting {}'.format(shortname)
-            outfc = os.path.join(folder, shortname + '.shp')
-            outcs = arcpy.SpatialReference(projection)
-            arcpy.Project_management(infc, outfc, outcs)
-            print arcpy.GetMessages()
+    for infc in feature_classes:
+        project_feature_class(infc, folder)
 
 if __name__ == '__main__':
+    GDB_PATH = 'darmc.gdb'
     dump_geodatabase_to_folder(GDB_PATH)
-
